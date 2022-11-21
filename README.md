@@ -27,3 +27,8 @@ Example:
 6. Make logic more general to create hash tree for part of table rows
 7. Make logic more general to create hash tree for subsets
 8. Write stored procedure for comparing two databases / subsets
+
+
+# License
+
+The project will be published under MIT license.
