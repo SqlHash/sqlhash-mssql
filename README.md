@@ -4,7 +4,7 @@ A general-purpose hash trees support for Microsoft SQL Server databases (in deve
 
 # Idea for project
 
-1. In order to maintain and create the hash tree for SQL Server database, the special tables needs to be created and mantained on MS SQL Server side:
+1. In order to maintain and create the hash tree for SQL Server database, the special tables needs to be created and mantained:
 
 Example:
 
