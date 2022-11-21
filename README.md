@@ -15,7 +15,7 @@ Example:
 
 3. Initially, the structures needs to be filled using special stored procedure
 
-4. The hash tree support will be deployed in a single SQL script.
+4. The hash tree support will be deployed in a single T-SQL script.
 
 
 # Roadmap/plan
