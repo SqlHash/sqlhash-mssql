@@ -1,4 +1,4 @@
-# sqlsizer-mssql-hash-tree
+# sqlhash-mssql
 A general-purpose hash trees support for Microsoft SQL Server databases (in development)
 
 
