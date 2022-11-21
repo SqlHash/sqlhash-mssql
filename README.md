@@ -16,3 +16,14 @@ Example:
 3. Initially, the structures needs to be filled using special stored procedure
 
 4. The hash tree support will be deployed in a single SQL script.
+
+
+# Roadmap/plan
+1. Finish "Idea for project"
+2. Write a T-SQL script to create tables for all tables in MSQL database
+3. Write a T-SQL script to create hash tree for the specific table
+4. Write triggers to update/refresh hash tree
+5. Write stored procedure for comparing two tables using hash tree
+6. Make logic more general to create hash tree for part of table rows
+7. Make logic more general to create hash tree for subsets
+8. Write stored procedure for comparing two databases / subsets
