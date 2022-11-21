@@ -19,7 +19,7 @@ Example:
 
 
 # Roadmap/plan
-1. Finish "Idea for project"
+1. Finish "Idea for project" and Roadmap (in progress)
 2. Write a T-SQL script to create hash tree node tables for all tables in MSSQL database
 3. Write a T-SQL script to create hash tree for the specific table
 4. Write triggers to update/refresh hash tree
