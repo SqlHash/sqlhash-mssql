@@ -1,6 +1,5 @@
 # sqlhash-mssql
-A general-purpose hash trees support for Microsoft SQL Server databases (in development)
-
+A general-purpose hash trees support for Microsoft SQL Server databases (deployed as a single T-SQL script)
 
 # Idea for project
 
