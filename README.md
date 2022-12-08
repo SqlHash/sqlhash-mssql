@@ -32,4 +32,4 @@ Example:
 
 # License
 
-The project will be published under MIT license.
+The project is published under MIT license.
