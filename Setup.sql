@@ -7,6 +7,8 @@ BEGIN
 	DECLARE @pks TABLE ([schema] VARCHAR(128), [table] VARCHAR(128), [column] VARCHAR(128), [datatype] VARCHAR(128), [len] INT, [position] INT)
 	DECLARE @columns TABLE ([schema] VARCHAR(128), [table] VARCHAR(128), [column] VARCHAR(128), [datatype] VARCHAR(128), [position] INT)
 	DECLARE @sql NVARCHAR(MAX)
+	DECLARE @sql_2 NVARCHAR(MAX)
+	DECLARE @sql_3 NVARCHAR(MAX)
 
 	INSERT INTO @tables
 	SELECT
@@ -78,6 +80,7 @@ BEGIN
 	DECLARE @keys2_end VARCHAR(MAX)
 	DECLARE @keys3_start VARCHAR(MAX)
 	DECLARE @keys3_end VARCHAR(MAX)
+	DECLARE @join VARCHAR(MAX)
 
 	DECLARE tablesCursor CURSOR  
 	FOR SELECT DISTINCT [schema], [table] FROM @tables
@@ -93,8 +96,15 @@ BEGIN
 		FROM @pks p
 		WHERE p.[table] = @table AND p.[schema] = @schema
 		ORDER BY p.position
-
 			
+		SET @join = ''
+		SELECT @join = @join + 'start_' + CONVERT(varchar, p.position) + '=' + p.[column] + ' AND '
+		FROM @pks p
+		WHERE p.[table] = @table AND p.[schema] = @schema
+		ORDER BY p.position
+		
+		SET @join = SUBSTRING(@join, 0, LEN(@join) - 3) 
+
 		SET @keys3_start = ''
 		SET @keys3_end = ''
 
@@ -139,7 +149,7 @@ BEGIN
 			EXEC (@sql)
 		END
 
-		SET @sql = 'CREATE TABLE SqlHash.' + @schema + '_' + @table + ' ([sqlhash_nodeId] int primary key identity(1,1), seq int, ' + @keys_start +  ',' + @keys_end + ', [sha2_256] varbinary(32), [parent] int, [level] int)'
+		SET @sql = 'CREATE TABLE SqlHash.' + @schema + '_' + @table + ' ([sqlhash_nodeId] int primary key identity(1,1), seq int, ' + @keys_start +  ',' + @keys_end + ', [sha2_256] varbinary(32), [parent] int, [level] int, [updated] datetime)'
 		EXEC (@sql)
 
 		SET @sql = 'CREATE UNIQUE INDEX [Index_U] ON SqlHash.' + @schema + '_' + @table + ' (level ASC, seq ASC)'
@@ -159,7 +169,7 @@ BEGIN
 		SET @hash = SUBSTRING(@hash, 0, LEN(@hash)) + ')'
 
 
-		SET @sql = 'INSERT INTO  [SqlHash].' + @schema + '_' + @table  +' SELECT ROW_NUMBER() OVER(ORDER BY (SELECT NULL)),' + @keys + @keys + ' HASHBYTES(''SHA2_256'', ' + @hash + '), NULL, 0 FROM ' + @schema + '.' + @table
+		SET @sql = 'INSERT INTO  [SqlHash].' + @schema + '_' + @table  +' SELECT ROW_NUMBER() OVER(ORDER BY (SELECT NULL)),' + @keys + @keys + ' HASHBYTES(''SHA2_256'', ' + @hash + '), NULL, 0, NULL FROM ' + @schema + '.' + @table
 		EXEC (@sql)
 
 		SET @sql = '
@@ -178,11 +188,12 @@ BEGIN
 			BEGIN
 			
 			
-				INSERT [SqlHash].' + @schema + '_' + @table + '(seq, ' + @keys2_start +  @keys2_end + ' sha2_256, parent, [level])
+				INSERT [SqlHash].' + @schema + '_' + @table + '(seq, ' + @keys2_start +  @keys2_end + ' sha2_256, parent, [level], [updated])
 				SELECT
 					ROW_NUMBER() OVER(ORDER BY (SELECT NULL)),' + @keys3_start + @keys3_end + ' HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), sha2_256, 2), ''|'')) as [hash],
 					NULL,
-					@level + 1 as [level]
+					@level + 1 as [level],
+					NULL
 				FROM [SqlHash].' + @schema + '_' + @table + ' p
 				WHERE p.[level] = @level
 				GROUP BY  p.[sqlhash_nodeId] / 2
@@ -199,8 +210,70 @@ BEGIN
 			END
 		'
 
+		SET @sql_2 = '
+CREATE OR ALTER TRIGGER ' + @schema + '.' + @table + '_SqlHash_Update
+	ON ' + @schema + '.' + @table + '
+	AFTER UPDATE
+AS
+BEGIN
+	UPDATE p
+		SET p.sha2_256 = HASHBYTES(''SHA2_256'', ' + @hash + '), updated = GETDATE()
+	FROM SqlHash.' + @schema + '_' + @table + ' p
+	INNER JOIN inserted ON ' + @join + '
+END'
+
+
+		SET @sql_3 = 'CREATE OR ALTER TRIGGER SqlHash.' + @schema + '_' +  @table + '_Update
+	ON SqlHash.' + @schema + '_' + @table + '
+	AFTER UPDATE
+AS
+BEGIN
+
+SET NOCOUNT ON
+
+DECLARE @level  INT = 0
+DECLARE @parents TABLE (parent INT)
+DECLARE @hashes TABLE (parent INT, [hash] VARBINARY(32))
+
+INSERT INTO @parents
+SELECT p.parent 
+FROM SqlHash.' + @schema + '_' + @table + ' p
+WHERE p.[level] = 0 AND p.sqlhash_nodeId IN (SELECT sqlhash_nodeId FROM inserted)
+
+WHILE (1=1)
+BEGIN
+	INSERT INTO @hashes
+	SELECT p.parent, HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), p.sha2_256, 2), ''|''))
+	FROM SqlHash.' + @schema + '_' + @table + ' p
+	WHERE (p.[level] = @level) AND p.parent IN (SELECT parent FROM @parents)
+	GROUP BY p.parent
+
+	IF @@ROWCOUNT = 0
+		BREAK
+
+	UPDATE p
+		SET sha2_256 = h.[hash], [updated] = GETDATE()
+	FROM SqlHash.Production_Product p
+	INNER JOIN @hashes h ON p.sqlhash_nodeId = h.parent
+	
+
+	INSERT INTO @parents
+	SELECT p.parent 
+	FROM SqlHash.Production_Product p
+	WHERE p.sqlhash_nodeId IN (SELECT parent FROM @parents)
+
+	SET @level = @level + 1
+END
+END
+
+		'
+
 		PRINT 'Setting up: ' + @schema + '.' + @table
+		
 		EXEC (@sql)
+		EXEC (@sql_2)
+		EXEC (@sql_3)
+
 		PRINT 'Done'
 		
 		FETCH NEXT FROM tablesCursor INTO @schema, @table
