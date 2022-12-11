@@ -21,7 +21,10 @@ Example:
 2. Write a T-SQL script to create hash tree node tables for all tables in MSSQL database (**done**)
 3. Write a T-SQL script to create hash tree for the specific table (**done**)
 
-4. Write triggers to update/refresh hash tree 
+4. Write triggers to update/refresh hash tree: 
+  - update 
+  - delete 
+  - insert
 5. Write stored procedure for comparing two tables using hash tree
 6. Make logic more general to create hash tree for part of table rows
 7. Make logic more general to create hash tree for subsets
