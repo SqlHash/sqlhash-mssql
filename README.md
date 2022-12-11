@@ -22,7 +22,7 @@ Example:
 3. Write a T-SQL script to create hash tree for the specific table (**done**)
 
 4. Write triggers to update/refresh hash tree: 
-  - update 
+  - update (**done**)
   - delete 
   - insert
 5. Write stored procedure for comparing two tables using hash tree
