@@ -89,6 +89,7 @@ BEGIN
 	DECLARE @keys5_end VARCHAR(MAX)
 
 	DECLARE @join VARCHAR(MAX)
+	DECLARE @where VARCHAR(MAX)
 
 	DECLARE tablesCursor CURSOR  
 	FOR SELECT DISTINCT [schema], [table] FROM @tables
@@ -113,6 +114,14 @@ BEGIN
 		
 		SET @join = SUBSTRING(@join, 0, LEN(@join) - 3) 
 
+		
+		SET @where = ''
+		SELECT @where = @where + '@key' + CONVERT(varchar, p.position) + '=' + p.[column] + ' AND '
+		FROM @pks p
+		WHERE p.[table] = @table AND p.[schema] = @schema
+		ORDER BY p.position
+		SET @where = SUBSTRING(@where, 0, LEN(@where) - 3) 
+		
 		SET @keys3_start = ''
 		SET @keys3_end = ''
 
@@ -411,10 +420,126 @@ BEGIN
 
 END'
 
+SET @sql_3 = 'CREATE OR ALTER TRIGGER [' + @schema + '].['+ @table + '_SqlHash_Insert]
+	ON [' + @schema + '].[' + @table + ']
+	AFTER INSERT
+AS
+BEGIN
+	SET NOCOUNT ON
+
+	' + @vars + '
+
+	DECLARE @maxLevel INT
+	DECLARE @nodeId INT
+	DECLARE @i INT
+	DECLARE @startNode INT
+	DECLARE @foundNode INT
+	DECLARE @order INT
+
+
+	SELECT @maxLevel = MAX([level])
+	FROM [SqlHash].' + @schema + '_' + @table + '
+
+	IF @maxLevel is NULL
+	BEGIN
+		INSERT INTO  [SqlHash].' + @schema + '_' + @table  +' SELECT ROW_NUMBER() OVER(ORDER BY (SELECT NULL)),' + @keys + ',' + @keys + ', HASHBYTES(''SHA2_256'', ' + @hash + '), NULL, 0, NULL,0 FROM inserted
+
+			INSERT [SqlHash].' + @schema + '_' + @table + '(seq, ' + @keys2_start +  @keys2_end + ' sha2_256, parent, [level], [updated], [order])
+				SELECT
+					ROW_NUMBER() OVER(ORDER BY (SELECT NULL)),' + @keys3_start + @keys3_end + ' HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), sha2_256, 2), ''|'')) as [hash],
+					NULL,
+					1,
+					NULL,
+					COUNT(*)
+				FROM [SqlHash].' + @schema + '_' + @table + ' p
+				WHERE p.[level] = 0
+				GROUP BY  p.[sqlhash_nodeId] / 2
+
+				UPDATE t
+					SET parent = t2.sqlhash_nodeId
+				FROM SqlHash.' + @schema + '_' + @table + ' t 
+				INNER JOIN [SqlHash].' + @schema + '_' + @table + ' t2 ON CEILING(CONVERT(float, t.seq) / 2) = t2.seq AND t2.level = 1
+				WHERE t.[level] = 0
+		
+	END
+	ELSE
+	BEGIN
+	
+	SELECT @startNode = sqlhash_nodeId
+	FROM [SqlHash].' + @schema + '_' + @table + '
+	WHERE [level] = @maxLevel
+
+	DECLARE cur_inserted CURSOR 
+		FOR SELECT DISTINCT ' + @keys + ' FROM inserted
+	OPEN cur_inserted  
+	FETCH NEXT FROM cur_inserted INTO ' + @vars2 + '
+	
+	WHILE @@FETCH_STATUS = 0  
+	BEGIN
+		DECLARE @path TABLE (nodeId INT)
+
+		SET @nodeId = @startNode
+
+		WHILE (1=1)
+		BEGIN
+			INSERT INTO @path VALUES(@nodeId)
+			SET @foundNode = NULL
+
+			SELECT TOP 1  @foundNode = t.sqlhash_nodeId
+			FROM  [SqlHash].' + @schema + '_' + @table + ' t
+			WHERE [level] > 0 AND parent = @nodeId AND (' + @cond + ')
+			ORDER BY seq ASC
+	
+			IF @foundNode IS NOT NULL
+			BEGIN
+				SET @nodeId = @foundNode
+			END
+			ELSE
+			BEGIN
+				BREAK
+			END
+		END
+
+		INSERT INTO  [SqlHash].' + @schema + '_' + @table  +' SELECT 0,' + @keys + ',' + @keys + ', HASHBYTES(''SHA2_256'', ' + @hash + '), @nodeId, 0, NULL,0 FROM inserted WHERE ' + @where +'
+
+		-- update the tree (tree could be unbalanced)
+		SELECT 
+					p.parent,
+					' + @keys4_start + '
+					' + @keys4_end + '
+					HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), sha2_256, 2), ''|'')) as [hash],
+					COUNT(*) as [count]
+		INTO #tmp
+		FROM [SqlHash].' + @schema + '_' + @table + ' p
+		WHERE p.parent IN (SELECT nodeId from @path)
+		GROUP BY p.parent
+
+		UPDATE p
+		 SET
+			sha2_256 = t.[hash],
+			' + @keys5_start + '
+			' + @keys5_end + '
+			updated = GETDATE(),
+			[order] = t.[count]
+		FROM [SqlHash].' + @schema + '_' + @table + ' p
+		INNER JOIN #tmp t ON p.sqlhash_nodeId = t.parent
+
+		
+		DROP TABLE #tmp
+		FETCH NEXT FROM cur_inserted INTO ' + @vars2 + '
+	END
+
+	CLOSE cur_inserted
+	DEALLOCATE cur_inserted
+
+	END
+END'
+
 		PRINT 'Setting up: ' + @schema + '.' + @table
 		
 		EXEC (@sql)
 		EXEC (@sql_2)
+		EXEC (@sql_3)
 		EXEC (@sql_4)
 
 		PRINT 'Done'
