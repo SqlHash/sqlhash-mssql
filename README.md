@@ -23,7 +23,7 @@ Example:
 
 4. Write triggers to update/refresh hash tree: 
   - update (**done**)
-  - delete 
+  - delete (**done**)
   - insert
 5. Write stored procedure for comparing two tables using hash tree
 6. Make logic more general to create hash tree for part of table rows
