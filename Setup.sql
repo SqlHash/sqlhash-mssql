@@ -76,6 +76,7 @@ BEGIN
 	DECLARE @schema VARCHAR(128)
 	DECLARE @table VARCHAR(128)
 	DECLARE @keys VARCHAR(MAX)
+	DECLARE @keys2 VARCHAR(MAX)
 	DECLARE @keys_start VARCHAR(MAX)
 	DECLARE @keys_end VARCHAR(MAX)
 	DECLARE @keys2_start VARCHAR(MAX)
@@ -92,6 +93,7 @@ BEGIN
 	DECLARE @join VARCHAR(MAX)
 	DECLARE @where VARCHAR(MAX)
 	DECLARE @order VARCHAR(MAX)
+	DECLARE @order2 VARCHAR(MAX)
 
 	DECLARE tablesCursor CURSOR  
 	FOR SELECT DISTINCT [schema], [table] FROM @tables
@@ -107,6 +109,20 @@ BEGIN
 		WHERE p.[table] = @table AND p.[schema] = @schema
 		ORDER BY p.position
 		SET @keys = SUBSTRING(@keys, 0, LEN(@keys)) 
+
+		SET @keys2 = ''
+		SELECT @keys2 = @keys2 + 'start_' + CONVERT(varchar, p.position) + ' ASC,'
+		FROM @pks p
+		WHERE p.[table] = @table AND p.[schema] = @schema
+		ORDER BY p.position
+		SET @keys2 = SUBSTRING(@keys2, 0, LEN(@keys2)) 
+
+		SET @keys2 = @keys2 + ' ,'
+		SELECT @keys2 = @keys2 + 'end_' + CONVERT(varchar, p.position) + ' ASC,'
+		FROM @pks p
+		WHERE p.[table] = @table AND p.[schema] = @schema
+		ORDER BY p.position
+		SET @keys2 = SUBSTRING(@keys2, 0, LEN(@keys2)) 
 
 		SET @keys6_start = ''
 		SELECT @keys6_start = @keys6_start + 'MIN(' + p.[column] + '),'
@@ -136,6 +152,13 @@ BEGIN
 		WHERE p.[table] = @table AND p.[schema] = @schema
 		ORDER BY p.position
 		SET @order = SUBSTRING(@order, 0, LEN(@order)) 
+
+		SET @order2 = ''
+		SELECT @order2 = @order2 + 'p.start_' + CONVERT(varchar, p.position) + ' DESC,'
+		FROM @pks p
+		WHERE p.[table] = @table AND p.[schema] = @schema
+		ORDER BY p.position
+		SET @order2 = SUBSTRING(@order2, 0, LEN(@order2)) 
 
 		SET @where = ''
 		SELECT @where = @where + '@key' + CONVERT(varchar, p.position) + '=' + p.[column] + ' AND '
@@ -219,7 +242,11 @@ BEGIN
 
 		SET @sql = 'CREATE INDEX [Index_P] ON SqlHash.' + @schema + '_' + @table + ' ([parent] ASC)'
 		EXEC (@sql)
+
 		SET @sql = 'CREATE INDEX [Index_L] ON SqlHash.' + @schema + '_' + @table + ' ([level] ASC)'
+		EXEC (@sql)
+
+		SET @sql = 'CREATE INDEX [Index_LK] ON SqlHash.' + @schema + '_' + @table + ' ([level] ASC, ' + @keys2 + ')'
 		EXEC (@sql)
 
 		
@@ -477,19 +504,10 @@ BEGIN
 
 	' + @vars + '
 
-	DECLARE @maxLevel INT
 	DECLARE @nodeId INT
 	DECLARE @i INT
-	DECLARE @startNode INT
 	DECLARE @foundNode INT
 	DECLARE @order INT
-
-	SELECT @maxLevel = MAX([level])
-	FROM [SqlHash].' + @schema + '_' + @table + '
-
-	SELECT @startNode = sqlhash_nodeId
-	FROM [SqlHash].' + @schema + '_' + @table + '
-	WHERE level = @maxLevel AND level > 0
 
 	DECLARE @toBalance TABLE (nodeId INT primary key)
 
@@ -500,102 +518,82 @@ BEGIN
 	
 	WHILE @@FETCH_STATUS = 0  
 	BEGIN
-		DECLARE @path TABLE (nodeId INT)
+		SET @nodeId = NULL
 
-		SET @nodeId = @startNode
-
-		WHILE (1=1)
+		SELECT TOP 1  @foundNode = p.sqlhash_nodeId
+		FROM  [SqlHash].' + @schema + '_' + @table + ' p
+		WHERE [level] = 1 AND (' + @cond +' OR ' + @cond2 + ')
+		ORDER BY ' + @order + '
+	
+		IF @foundNode IS NOT NULL
 		BEGIN
-			INSERT INTO @path VALUES(@nodeId)
-
-			SET @foundNode = NULL
-
-			SELECT TOP 1  @foundNode = t.sqlhash_nodeId
-			FROM  [SqlHash].' + @schema + '_' + @table + ' t
-			WHERE [level] > 0 AND parent = @nodeId AND (' + @cond + ')
-			ORDER BY seq ASC
-	
-			IF @foundNode IS NOT NULL
-			BEGIN
-				SET @nodeId = @foundNode
-				CONTINUE
-			END
-
-			SELECT TOP 1  @foundNode = t.sqlhash_nodeId
-			FROM  [SqlHash].' + @schema + '_' + @table + ' t
-			WHERE [level] > 0 AND parent = @nodeId AND (' + @cond2 + ')
-			ORDER BY seq ASC
-	
-			IF @foundNode IS NOT NULL
-			BEGIN
-				SET @nodeId = @foundNode
-				CONTINUE
-			END
-
-			SELECT TOP 1  @foundNode = t.sqlhash_nodeId
-			FROM  [SqlHash].' + @schema + '_' + @table + ' t
-			WHERE [level] > 0 AND parent = @nodeId AND (' + @cond3 + ')
-			ORDER BY seq DESC
+			SET @nodeId = @foundNode
+		END
+		ELSE
+		BEGIN
+			SELECT TOP 1  @foundNode = p.sqlhash_nodeId
+			FROM  [SqlHash].' + @schema + '_' + @table + ' p
+			WHERE [level] = 1 AND (' + @cond3 + ')
+			ORDER BY ' + @order2 + '
 
 			IF @foundNode IS NOT NULL
 			BEGIN
 				SET @nodeId = @foundNode
 			END
-			ELSE
-			BEGIN
-				BREAK
-			END
-			
 		END
 
 		IF (@nodeId IS NULL)
 		BEGIN
-
 			INSERT INTO  [SqlHash].' + @schema + '_' + @table  +'
 			SELECT 1,' + @keys + ',' + @keys + ', HASHBYTES(''SHA2_256'', ' + @hash + '), NULL, 1, NULL, 1, NULL, NULL FROM inserted WHERE ' + @where +'
 
 			INSERT INTO  [SqlHash].' + @schema + '_' + @table  +'
 			SELECT 1,' + @keys + ',' + @keys + ', HASHBYTES(''SHA2_256'', ' + @hash + '), SCOPE_IDENTITY(), 0, NULL, 0, NULL, NULL FROM inserted WHERE ' + @where +'
 
+			CLOSE cur_inserted
+			DEALLOCATE cur_inserted
+
+			RETURN
 		END
 		ELSE
 		BEGIN
 			INSERT INTO  [SqlHash].' + @schema + '_' + @table  +'
 				OUTPUT INSERTED.sqlhash_nodeId INTO @toBalance(nodeId)
-			SELECT 1,' + @keys + ',' + @keys + ', HASHBYTES(''SHA2_256'', ' + @hash + '), @nodeId, 0, NULL, 0, NULL, NULL FROM inserted WHERE ' + @where +'
+			SELECT NULL,' + @keys + ',' + @keys + ', HASHBYTES(''SHA2_256'', ' + @hash + '), @nodeId, 0, NULL, 0, NULL, NULL FROM inserted WHERE ' + @where +'
 
 			UPDATE [SqlHash].' + @schema + '_' + @table + ' 
 			SET [order] = [order] + 1
 			WHERE sqlhash_nodeId = @nodeId
 
 		END
-
-
-		
-		
 		FETCH NEXT FROM cur_inserted INTO ' + @vars2 + '
 	END
 	CLOSE cur_inserted
 	DEALLOCATE cur_inserted
 
 	DECLARE @lev INT 
+	DECLARE @seq INT
 	DECLARE @count INT
+	DECLARE @break BIT = 0
 	DECLARE @nodes TABLE (node INT)
 
 	SET @lev = 0
 	
 	WHILE (1=1)
 	BEGIN
-
-		INSERT INTO @toBalance(nodeId)
 		SELECT t.sqlhash_nodeId
+		INTO #tmp3
 		FROM [SqlHash].' + @schema + '_' + @table + ' t
 		WHERE ((t.parent is null) OR (t.parent IN (SELECT parent FROM [SqlHash].' + @schema + '_' + @table + ' t2 WHERE t2.sqlhash_nodeId IN (SELECT nodeId FROM @toBalance))))
 			AND t.sqlhash_nodeId NOT IN (SELECT nodeId FROM @toBalance)
 			AND t.[level] = @lev
 
-		CREATE TABLE #ids1 (id int identity(1,1) primary key, seq int, [create] bit, nodeId int, parentId int, [order] int)
+		INSERT INTO @toBalance(nodeId)
+		SELECT sqlhash_nodeId FROM #tmp3
 
+		DROP TABLE #tmp3
+
+		CREATE TABLE #ids1 (id int identity(1,1) primary key, [seq] int, [create] bit, [nodeId] int, [parentId] int, [order] int)
 		INSERT INTO #ids1(seq, [create], nodeId, parentId, [order])
 		SELECT 
 			x.seq, 
@@ -607,11 +605,10 @@ BEGIN
 			x.parent, 
 			x.[order]
 		FROM (
-		SELECT ROW_NUMBER() OVER(PARTITION BY p.parent ORDER BY ' + @order + ')  as [seq], p.[sqlhash_nodeId], p.[parent], p2.[order], p.[level]
-		FROM [SqlHash].' + @schema + '_' + @table + ' p
-		LEFT JOIN [SqlHash].' + @schema + '_' + @table + ' p2 ON p.parent = p2.sqlhash_nodeId
-		WHERE p.sqlhash_nodeId IN (SELECT nodeId FROM @toBalance)) x
-		ORDER BY x.parent, x.seq
+			SELECT ROW_NUMBER() OVER(PARTITION BY p.parent ORDER BY ' + @order + ')  as [seq], p.[sqlhash_nodeId], p.[parent], p2.[order], p.[level]
+			FROM [SqlHash].' + @schema + '_' + @table + ' p
+			LEFT JOIN [SqlHash].' + @schema + '_' + @table + ' p2 ON p.parent = p2.sqlhash_nodeId
+			WHERE p.sqlhash_nodeId IN (SELECT nodeId FROM @toBalance)) x
 
 		IF (@lev = 0)
 		BEGIN
@@ -624,52 +621,60 @@ BEGIN
 		INSERT [SqlHash].' + @schema + '_' + @table + '(seq, ' + @keys2_start +  @keys2_end + ' sha2_256, parent, [level], [updated], [order], [tmp], [tmp2])
 			OUTPUT inserted.sqlhash_nodeId INTO @toBalance  
 		SELECT
-			1,' + @keys3_start + @keys3_end + ' HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), p.sha2_256, 2), ''|'')  WITHIN GROUP ( ORDER BY ' + @order + ') ) as [hash],
-			NULL,
+			NULL,' + @keys3_start + @keys3_end + ' HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), p.sha2_256, 2), ''|'')  WITHIN GROUP ( ORDER BY ' + @order + ') ) as [hash],
+			p2.parent,
 			@lev + 1 as [level],
 			NULL,
 			COUNT(*),
 			CEILING(CONVERT(float, t.seq) / 4),
 			p.parent
 		FROM [SqlHash].' + @schema + '_' + @table + ' p
+		LEFT JOIN [SqlHash].' + @schema + '_' + @table + ' p2 ON p.parent = p2.sqlhash_nodeId
 		INNER JOIN #ids1 t ON p.sqlhash_nodeId = t.nodeId
 		WHERE t.[create] = 1 
-		GROUP BY CEILING(CONVERT(float, t.seq) / 4), p.parent 
+		GROUP BY CEILING(CONVERT(float, t.seq) / 4), p.parent, p2.parent
+		
 		
 		-- update nodes at level = @lev
-		UPDATE t SET 
-			parent = t2.sqlhash_nodeId,
-			updated = GETDATE()
+		SELECT 
+			t2.sqlhash_nodeId as [parent],
+			t.sqlhash_nodeId
+		INTO #tmp5
 		FROM SqlHash.' + @schema + '_' + @table + ' t 
 		INNER JOIN #ids1 i ON i.nodeId = t.sqlhash_nodeId
-		INNER JOIN  SqlHash.' + @schema + '_' + @table + ' t2 ON CEILING(CONVERT(float, i.seq) / 4) = t2.tmp AND t2.level = @lev + 1 AND (t2.tmp2 = t.parent OR t2.tmp2 IS NULL AND t2.level > 0)
+		INNER JOIN  SqlHash.' + @schema + '_' + @table + ' t2 ON CEILING(CONVERT(float, i.seq) / 4) = t2.tmp AND t2.level = @lev + 1 AND (t2.tmp2 = t.parent OR t2.tmp2 IS NULL and t.parent IS NULL)
 		WHERE t.[level] = @lev and i.[create] = 1
 
+		UPDATE t SET 
+			parent = i.parent,
+			updated = GETDATE()
+		FROM SqlHash.' + @schema + '_' + @table + ' t 
+		INNER JOIN #tmp5 i ON i.sqlhash_nodeId = t.sqlhash_nodeId
+		WHERE t.[level] = @lev
+
+		DROP TABLE #tmp5
+	
 		UPDATE t SET 
 			seq = i.seq,
 			updated = GETDATE()
 		FROM SqlHash.' + @schema + '_' + @table + ' t 
 		INNER JOIN #ids1 i ON i.nodeId = t.sqlhash_nodeId
 		WHERE t.[level] = @lev
-		
 
 		DROP TABLE #ids1
+
 		SELECT @count = COUNT(*) FROM [SqlHash].' + @schema + '_' + @table + ' p WHERE p.parent IS NULL
+		SELECT @seq =  COUNT(*) FROM @toBalance
 
-		IF (@count = 1)
+		IF (@count = 1 AND (@seq = 0 OR @seq = 1))
+		BEGIN
 			BREAK
-
+		END
 		SET @lev = @lev + 1
-
 	END
-
-	DECLARE @j INT
-
-	SET @j = 0
 
 	WHILE (1=1)
 		BEGIN
-
 			SELECT	
 					p.parent,
 					' + @keys4_start + '
@@ -686,8 +691,8 @@ BEGIN
 				' + @keys5_end + '
 				updated = GETDATE(),
 				[order] = t.[count],
-				[tmp2] = NULL,
-				[tmp] = NULL
+				[tmp] = NULL,
+				[tmp2] = NULL
 			FROM [SqlHash].' + @schema + '_' + @table + ' p
 			INNER JOIN #tmp t ON p.sqlhash_nodeId = t.parent
 
