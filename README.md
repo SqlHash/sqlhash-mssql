@@ -25,7 +25,7 @@ Example:
   - update (**done**)
   - delete (**done**)
   - insert (**done**)
-5. Write stored procedure for comparing two tables using hash tree
+5. Write stored procedure for comparing two tables using hash tree (**in progress **)
 6. Make logic more general to create hash tree for part of table rows
 7. Make logic more general to create hash tree for subsets
 8. Write stored procedure for comparing two databases / subsets
