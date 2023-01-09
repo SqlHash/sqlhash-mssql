@@ -246,6 +246,9 @@ BEGIN
 		SET @sql = 'CREATE INDEX [Index_L] ON SqlHash.' + @schema + '_' + @table + ' ([level] ASC)'
 		EXEC (@sql)
 
+		SET @sql = 'CREATE INDEX [Index_S] ON SqlHash.' + @schema + '_' + @table + ' ([seq] ASC)'
+		EXEC (@sql)
+
 		SET @sql = 'CREATE INDEX [Index_LK] ON SqlHash.' + @schema + '_' + @table + ' ([level] ASC, ' + @keys2 + ')'
 		EXEC (@sql)
 
@@ -283,7 +286,7 @@ BEGIN
 			BEGIN
 
 				CREATE TABLE #ids1 (id int identity(1,1) primary key, nodeId int)
-				CREATE TABLE #ids2 (id int identity(1,1) primary key, nodeId int )
+				CREATE TABLE #ids2 (id int identity(1,1) primary key, nodeId int)
 
 				INSERT INTO #ids1(nodeId)
 				SELECT sqlhash_nodeId
@@ -294,7 +297,7 @@ BEGIN
 				INSERT [SqlHash].' + @schema + '_' + @table + '(seq, ' + @keys2_start +  @keys2_end + ' sha2_256, parent, [level], [updated], [order])
 				OUTPUT INSERTED.sqlhash_nodeId INTO #ids2(nodeId)
 				SELECT
-					(ROW_NUMBER() OVER(PARTITION BY CEILING(CONVERT(float, i.id) / 4) ORDER BY (SELECT NULL)) - 1),' + @keys3_start + @keys3_end + ' HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), sha2_256, 2), ''|'') WITHIN GROUP ( ORDER BY ' + @order + ') ) as [hash],
+					ROW_NUMBER() OVER(PARTITION BY CEILING(CONVERT(float, i.id) / 4) ORDER BY (SELECT NULL)), ' + @keys3_start + @keys3_end + ' HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), sha2_256, 2), ''|'') WITHIN GROUP ( ORDER BY ' + @order + ') ) as [hash],
 					NULL,
 					@level + 1 as [level],
 					NULL,
@@ -306,7 +309,7 @@ BEGIN
 
 				UPDATE t SET 
 					parent = t2.sqlhash_nodeId,
-					seq =  (i.id - 1) % 4
+					seq = (i.id - 1) % 4 + 1
 				FROM SqlHash.' + @schema + '_' + @table + ' t 
 				INNER JOIN #ids1 i ON i.nodeId = t.sqlhash_nodeId
 				INNER JOIN #ids2 i2 ON i2.id = CEILING(CONVERT(float, i.id) / 4)
@@ -414,20 +417,9 @@ BEGIN
 
 	' + @vars + '
 
-	DECLARE @maxLevel INT
 	DECLARE @nodeId INT
-	DECLARE @i INT
-	DECLARE @startNode INT
-	DECLARE @foundNode INT
-	DECLARE @order INT
-
-
-	SELECT @maxLevel = MAX([level])
-	FROM [SqlHash].' + @schema + '_' + @table + '
-	
-	SELECT @startNode = sqlhash_nodeId
-	FROM [SqlHash].' + @schema + '_' + @table + '
-	WHERE [level] = @maxLevel
+	DECLARE @parent INT
+	DECLARE @toRefresh TABLE (nodeId INT primary key)
 
 	DECLARE cur_deleted CURSOR 
 		FOR SELECT DISTINCT ' + @keys + ' FROM deleted
@@ -436,63 +428,73 @@ BEGIN
 	
 	WHILE @@FETCH_STATUS = 0  
 	BEGIN
-		DECLARE @path TABLE (nodeId INT)
+		SELECT TOP 1  @nodeId = p.sqlhash_nodeId, @parent = p.parent
+		FROM  [SqlHash].' + @schema + '_' + @table + ' p
+		WHERE level = 0 AND (' + @cond + ')
+		ORDER BY ' + @order + '
 
-		SET @nodeId = @startNode
+		DELETE FROM [SqlHash].' + @schema + '_' + @table + '
+		WHERE sqlhash_nodeId = @nodeId
 
-		WHILE (1=1)
-		BEGIN
-			INSERT INTO @path VALUES(@nodeId)
-			SET @foundNode = NULL
+		IF NOT EXISTS(SELECT * FROM @toRefresh WHERE nodeId = @parent)
+			INSERT INTO @toRefresh VALUES(@parent)
 
-			SELECT TOP 1  @foundNode = t.sqlhash_nodeId
-			FROM  [SqlHash].' + @schema + '_' + @table + ' t
-			WHERE parent = @nodeId AND (' + @cond + ')
-			ORDER BY seq ASC
+		FETCH NEXT FROM cur_deleted INTO ' + @vars2 + '
+	END
 	
-			IF @foundNode IS NOT NULL
-			BEGIN
-				SET @nodeId = @foundNode
-			END
-			ELSE
-			BEGIN
-				BREAK
-			END
-		END
-
-		-- update the tree (tree could be unbalanced)
-		SELECT 
+	CLOSE cur_deleted
+	DEALLOCATE cur_deleted
+	
+	WHILE (1=1)
+	BEGIN
+			SELECT	
 					p.parent,
 					' + @keys4_start + '
 					' + @keys4_end + '
-					HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), sha2_256, 2), ''|'') WITHIN GROUP ( ORDER BY ' + @order + ') ) as [hash],
 					COUNT(*) as [count]
-		INTO #tmp
-		FROM [SqlHash].' + @schema + '_' + @table + ' p
-		WHERE p.parent IN (SELECT nodeId from @path)
-		GROUP BY p.parent
+			INTO #tmp
+			FROM SqlHash.' + @schema + '_' + @table + ' p
+			WHERE p.parent IN (SELECT nodeId FROM @toRefresh)
+			GROUP BY p.parent
+	
+			UPDATE p
+			SET
+				' + @keys5_start + '
+				' + @keys5_end + '
+				updated = GETDATE(),
+				[order] = coalesce(t.[count], 0)
+			FROM [SqlHash].' + @schema + '_' + @table + ' p
+			LEFT JOIN #tmp t ON p.sqlhash_nodeId = t.parent
+			WHERE p.sqlhash_nodeId IN (SELECT nodeId FROM @toRefresh)
 
-		UPDATE p
-		 SET
-			sha2_256 = t.[hash],
-			' + @keys5_start + '
-			' + @keys5_end + '
-			updated = GETDATE(),
-			[order] = t.[count]
-		FROM [SqlHash].' + @schema + '_' + @table + ' p
-		INNER JOIN #tmp t ON p.sqlhash_nodeId = t.parent
+			DROP TABLE #tmp
 
-		DROP TABLE #tmp
-		FETCH NEXT FROM cur_deleted INTO ' + @vars2 + '
+			SELECT DISTINCT p.parent
+			INTO #tmp2
+			FROM [SqlHash].' + @schema + '_' + @table + ' p
+			WHERE p.sqlhash_nodeId IN (SELECT nodeId FROM @toRefresh) and p.parent IS NOT NULL
 
-		DELETE FROM [SqlHash].' + @schema + '_' + @table + '
-		WHERE sqlhash_nodeId IN (SELECT nodeId from @path) AND [order] = 0
+			DELETE p
+			FROM [SqlHash].' + @schema + '_' + @table + ' p
+			WHERE p.[order] = 0 AND p.sqlhash_nodeId IN (SELECT nodeId FROM @toRefresh)
+		
+			DELETE FROM @toRefresh
 
+			INSERT INTO  @toRefresh
+			SELECT parent
+			FROM #tmp2
+
+			IF @@ROWCOUNT = 0
+			BEGIN
+				DROP TABLE #tmp2
+				BREAK
+			END
+
+			DROP TABLE #tmp2
+			
 	END
-
-	CLOSE cur_deleted
-	DEALLOCATE cur_deleted
-
+	
+	
 END'
 
 SET @sql_3 = 'CREATE OR ALTER TRIGGER [' + @schema + '].['+ @table + '_SqlHash_Insert]
@@ -634,7 +636,6 @@ BEGIN
 		WHERE t.[create] = 1 
 		GROUP BY CEILING(CONVERT(float, t.seq) / 4), p.parent, p2.parent
 		
-		
 		-- update nodes at level = @lev
 		SELECT 
 			t2.sqlhash_nodeId as [parent],
@@ -664,7 +665,7 @@ BEGIN
 		DROP TABLE #ids1
 
 		SELECT @count = COUNT(*) FROM [SqlHash].' + @schema + '_' + @table + ' p WHERE p.parent IS NULL
-		SELECT @seq =  COUNT(*) FROM @toBalance
+		SELECT @seq =  COUNT(*) FROM [SqlHash].' + @schema + '_' + @table + ' p WHERE p.seq IS NULL
 
 		IF (@count = 1 AND (@seq = 0 OR @seq = 1))
 		BEGIN
