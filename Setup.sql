@@ -436,7 +436,7 @@ BEGIN
 		DELETE FROM [SqlHash].' + @schema + '_' + @table + '
 		WHERE sqlhash_nodeId = @nodeId
 
-		IF NOT EXISTS(SELECT * FROM @toRefresh WHERE nodeId = @parent)
+		IF @parent IS NOT NULL AND NOT EXISTS(SELECT * FROM @toRefresh WHERE nodeId = @parent)
 			INSERT INTO @toRefresh VALUES(@parent)
 
 		FETCH NEXT FROM cur_deleted INTO ' + @vars2 + '
@@ -680,6 +680,7 @@ BEGIN
 					p.parent,
 					' + @keys4_start + '
 					' + @keys4_end + '
+					HASHBYTES(''SHA2_256'',  STRING_AGG(CONVERT(varchar(max), p.sha2_256, 2), ''|'') WITHIN GROUP ( ORDER BY ' + @order + ') ) as [hash],
 					COUNT(*) as [count]
 			INTO #tmp
 			FROM SqlHash.' + @schema + '_' + @table + ' p
@@ -691,6 +692,7 @@ BEGIN
 				' + @keys5_start + '
 				' + @keys5_end + '
 				updated = GETDATE(),
+				sha2_256 = t.[hash],
 				[order] = t.[count],
 				[tmp] = NULL,
 				[tmp2] = NULL
